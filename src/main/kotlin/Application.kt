@@ -1,16 +1,20 @@
-package com.ff // <--- Asegúrate de que coincida con tu paquete
+package com.ff
 
 import io.ktor.server.application.*
 import io.ktor.server.netty.*
-import com.ff.config.configureDatabases // <--- Importamos la configuración de la DB
-import com.ff.plugins.* // <--- Importamos Rutas y JSON
+import com.ff.config.configureDatabases
+import com.ff.plugins.* // Importar los plugins
 
 fun main(args: Array<String>) {
     EngineMain.main(args)
 }
-
 fun Application.module() {
     configureDatabases()
-    configureSerialization() // <--- ¡ESTA LÍNEA ES VITAL!
+    configureSerialization()
+
+    // ⚠️ ¡IMPORTANTE! Esto debe ir ANTES de las rutas
+    configureHTTP()
+
+    // Las rutas van al final
     configureRouting()
 }
