@@ -14,10 +14,15 @@ data class InterviewResponse(
     val topic: String,
     val status: String,
     val date: String,
-    val assistantId: String? = null, // ID para conectar la llamada
-    val imageUrl: String? = null     // URL para el diseño de tarjetas
+    val assistantId: String? = null,
+    val imageUrl: String? = null
 )
 
-
 @Serializable
-data class CreateUserResponse(val id: Long, val message: String)
+data class InterviewResultResponse(
+    val id: Int,
+    val score: Int,
+    val feedback: String,
+    val topic: String,
+    val date: String
+)

@@ -8,22 +8,23 @@ import io.ktor.server.routing.*
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.transactions.transaction
 import com.ff.models.Users
-import com.ff.dtos.*
-
-fun Route.userRoutes() {
+// 👇 IMPORTANTE: Importamos todo lo que hay en dtos
+import com.ff.dtos.* fun Route.userRoutes() {
 
     post("/users") {
         try {
+            // 👇 CORRECCIÓN CLAVE: Agregamos <CreateUserRequest> entre los signos <>
+            // Esto arregla el error "Cannot infer type parameter T"
             val request = call.receive<CreateUserRequest>()
 
             val resultado = transaction {
-                // 1. Buscamos si el usuario ya existe por Firebase UID o Email
+                // 1. Buscamos si el usuario ya existe
                 val userExiste = Users.select {
                     (Users.firebaseUid eq request.firebaseUid) or (Users.email eq request.email)
                 }.singleOrNull()
 
                 if (userExiste == null) {
-                    // 2. Si NO existe, lo creamos (201 Created)
+                    // 2. Si NO existe, lo creamos
                     val idNuevo = Users.insert {
                         it[firebaseUid] = request.firebaseUid
                         it[email] = request.email
@@ -33,7 +34,7 @@ fun Route.userRoutes() {
 
                     HttpStatusCode.Created to CreateUserResponse(idNuevo, "Usuario registrado exitosamente")
                 } else {
-                    // 3. Si YA existe, devolvemos la info del usuario actual (200 OK)
+                    // 3. Si YA existe, devolvemos info existente
                     val idExistente = userExiste[Users.id]
                     HttpStatusCode.OK to CreateUserResponse(idExistente, "El usuario ya se encuentra registrado")
                 }

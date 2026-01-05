@@ -10,6 +10,7 @@ import org.jetbrains.exposed.sql.transactions.transaction
 import com.ff.models.*
 import com.ff.dtos.*
 import com.ff.vapi.VapiClient
+import java.sql.DriverManager
 
 fun Route.interviewRoutes() {
 
@@ -17,58 +18,25 @@ fun Route.interviewRoutes() {
     val baseUrl = application.environment.config.propertyOrNull("vapi.baseUrl")?.getString() ?: "https://api.vapi.ai"
     val vapiClient = VapiClient(apiKey, baseUrl)
 
+    // --- RUTA 1: CREAR ENTREVISTA (POST) ---
     post("/interviews") {
         try {
             val request = call.receive<CreateInterviewRequest>()
 
-            // 1. VALIDACIÓN
-            if (request.topic.isBlank()) {
-                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "El tema es obligatorio"))
-                return@post
-            }
-            if (request.topic.length > 50) {
-                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "El tema es muy largo (máx 50 caracteres)"))
-                return@post
-            }
-
-            // 2. INTELIGENCIA DE CONTEXTO
-            val isTech = request.topic.lowercase().any {
-                it.toString() in listOf("java", "kotlin", "python", "dev", "programador", "sql", "react", "datos", "node")
-            }
-
-            val roleName = if (isTech) "Senior Technical Recruiter" else "Expert Interviewer Coach"
-            val objective = if (isTech) "Assess technical depth and coding skills." else "Assess communication skills and practical knowledge."
-
+            // Prompt Original (Sin niveles todavía)
             val systemPrompt = """
-                Role: You are an $roleName specialized in ${request.topic}.
-                Objective: $objective
-                
-                Instructions:
-                1. Start by introducing yourself briefly.
-                2. Ask ONE question at a time.
-                3. If the answer is vague, ask a follow-up question.
-                4. Keep responses concise (max 3 sentences).
-                5. Be professional and encouraging.
+                Role: You are an Expert Technical Recruiter specialized in ${request.topic}.
+                Rules:
+                1. Ask EXACTLY ONE technical question.
+                2. Wait for the answer.
+                3. IMMEDIATE EVALUATION.
             """.trimIndent()
 
-            // 3. LLAMADA A VAPI
             val assistantIdGenerado = vapiClient.createEphemeralAssistant(systemPrompt, request.topic)
 
-            // 4. LÓGICA DE IMAGEN (Para tu diseño)
-            val iconUrl = when {
-                request.topic.lowercase().contains("java") -> "assets/icons/java.png"
-                request.topic.lowercase().contains("python") -> "assets/icons/python.png"
-                request.topic.lowercase().contains("english") -> "assets/icons/english.png"
-                else -> "assets/icons/default.png"
-            }
-
-            // 5. GUARDADO EN DB
             val responseObj = transaction {
                 val userRow = Users.select { Users.firebaseUid eq request.firebaseUid }.singleOrNull()
-
-                if (userRow == null) {
-                    null
-                } else {
+                if (userRow != null) {
                     val userIdReal = userRow[Users.id]
                     val newId = Interviews.insert {
                         it[userId] = userIdReal
@@ -78,27 +46,70 @@ fun Route.interviewRoutes() {
                     }.get(Interviews.id)
 
                     InterviewResponse(
-                        id = newId,
-                        topic = request.topic,
-                        status = "IN_PROGRESS",
-                        date = java.time.LocalDateTime.now().toString(),
-                        assistantId = assistantIdGenerado,
-                        imageUrl = iconUrl
+                        newId, request.topic, "IN_PROGRESS",
+                        java.time.LocalDateTime.now().toString(), assistantIdGenerado, "assets/icons/default.png"
                     )
-                }
+                } else null
             }
 
-            // 6. RESPUESTA FINAL
-            if (responseObj == null) {
-                call.respond(HttpStatusCode.NotFound, mapOf("error" to "Usuario no encontrado"))
-            } else {
-                call.respond(HttpStatusCode.Created, responseObj)
-            }
+            if (responseObj == null) call.respond(HttpStatusCode.NotFound, "Usuario no encontrado")
+            else call.respond(HttpStatusCode.Created, responseObj)
 
         } catch (e: Exception) {
-            application.log.error("CRITICAL ERROR: ${e.message}", e)
-            val msg = if (e.message?.contains("Vapi") == true) "Error de IA, intenta luego" else "Error interno"
-            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to msg, "details" to (e.message ?: "")))
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to e.message))
+        }
+    }
+
+    // --- RUTA 2: ÚLTIMO RESULTADO (GET) ---
+    get("/results/latest") {
+        try {
+            val dbUrl = "jdbc:mysql://localhost:3306/nexos?allowPublicKeyRetrieval=true&useSSL=false"
+            val conn = DriverManager.getConnection(dbUrl, "root", "admin")
+
+            var result: InterviewResultResponse? = null
+            // Trae solo el último
+            val query = "SELECT id, topic, score, feedback, created_at FROM interview_results ORDER BY id DESC LIMIT 1"
+            val rs = conn.prepareStatement(query).executeQuery()
+
+            if (rs.next()) {
+                result = InterviewResultResponse(
+                    rs.getInt("id"), rs.getInt("score"),
+                    rs.getString("feedback") ?: "", rs.getString("topic"),
+                    rs.getTimestamp("created_at").toString()
+                )
+            }
+            conn.close()
+            if (result != null) call.respond(HttpStatusCode.OK, result)
+            else call.respond(HttpStatusCode.NotFound, "Vacío")
+        } catch (e: Exception) { call.respond(HttpStatusCode.InternalServerError, e.message.toString()) }
+    }
+
+    // --- 🆕 RUTA 3: HISTORIAL COMPLETO (GET) ---
+    get("/results/history") {
+        try {
+            val dbUrl = "jdbc:mysql://localhost:3306/nexos?allowPublicKeyRetrieval=true&useSSL=false"
+            val conn = DriverManager.getConnection(dbUrl, "root", "admin")
+
+            val list = mutableListOf<InterviewResultResponse>()
+
+            // Trae los últimos 10 para el gráfico, ordenados por fecha ascendente (viejo -> nuevo)
+            val query = "SELECT * FROM (SELECT id, topic, score, feedback, created_at FROM interview_results ORDER BY created_at DESC LIMIT 10) sub ORDER BY created_at ASC"
+            val rs = conn.prepareStatement(query).executeQuery()
+
+            while (rs.next()) {
+                list.add(
+                    InterviewResultResponse(
+                        rs.getInt("id"), rs.getInt("score"),
+                        rs.getString("feedback") ?: "", rs.getString("topic"),
+                        rs.getTimestamp("created_at").toString()
+                    )
+                )
+            }
+            conn.close()
+            call.respond(HttpStatusCode.OK, list)
+
+        } catch (e: Exception) {
+            call.respond(HttpStatusCode.InternalServerError, emptyList<String>())
         }
     }
 }

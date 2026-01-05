@@ -43,7 +43,6 @@ data class CreateAssistantRequest(
     val transcriber: TranscriberConfig,
     val firstMessage: String?,
     val serverUrl: String? = null
-    // ⚠️ IMPORTANTE: Sacamos 'analysis' para que no de error 400
 )
 
 @Serializable
@@ -61,13 +60,13 @@ class VapiClient(private val apiKey: String, private val baseUrl: String) {
 
     private val client = HttpClient(CIO) {
         install(ContentNegotiation) { json(jsonConfig) }
-        expectSuccess = false // Para poder leer el error si falla
+        expectSuccess = false
     }
 
     suspend fun createEphemeralAssistant(prompt: String, topic: String): String {
-        println("🤖 VapiClient: Configurando Juez VELOZ (1 Pregunta) para: $topic")
+        println("🤖 VapiClient: Configurando Juez VELOZ para: $topic")
 
-        // 👇 TU URL DE NGROK (La saqué de tu captura, chequeá que siga verde)
+        // 👇 TU URL DE NGROK (Asegurate de que sea la que generaste HOY)
         val MI_URL_NGROK = "https://reunitable-zipppier-candie.ngrok-free.dev"
         val WEBHOOK_URL = "$MI_URL_NGROK/vapi/webhook"
 
@@ -88,11 +87,13 @@ class VapiClient(private val apiKey: String, private val baseUrl: String) {
             instructions = """
                 Role: Technical Interviewer ($topic).
                 Rules:
-                1. Ask EXACTLY ONE technical question based on the topic.
-                2. Wait for the user's answer.
-                3. IMMEDIATELY after the answer, say "FINISH" and provide a score.
-                4. REQUIRED FORMAT: "PUNTAJE: [0-100]. FEEDBACK: [Short summary]."
-                5. Do not ask more questions. Say goodbye and stop speaking.
+                1. Ask EXACTLY ONE technical question.
+                2. Wait for the answer.
+                3. IMMEDIATE EVALUATION:
+                   - Good answer -> High score.
+                   - "I don't know" or irrelevant topic -> SCORE: 0.
+                4. REQUIRED FORMAT: "PUNTAJE: [0-100]. FEEDBACK: [Summary]."
+                5. Do not ask more questions. Say goodbye.
             """.trimIndent()
         } else {
             lang = "es"
@@ -100,16 +101,22 @@ class VapiClient(private val apiKey: String, private val baseUrl: String) {
             voiceConfig = VoiceConfig("azure", "es-AR-TomasNeural")
             firstMsg = "Hola. Te voy a hacer una sola pregunta técnica. ¿Listo?"
 
-            // 🧠 INSTRUCCIONES DEL JUEZ VELOZ
+            // 🧠 PROMPT ANTI-TROLL Y ESTRICTO
             instructions = """
                 Rol: Entrevistador Técnico ($topic).
-                Reglas:
-                1. Haz EXACTAMENTE UNA (1) pregunta técnica difícil sobre el tema.
-                2. Espera que el usuario responda.
-                3. INMEDIATAMENTE después de su respuesta, evalúa su desempeño.
-                4. FORMATO OBLIGATORIO DE RESPUESTA FINAL:
-                   "Muy bien, terminamos. PUNTAJE: [0 a 100]. FEEDBACK: [Resumen de 1 frase]."
-                5. No hagas más preguntas. Despídete y corta.
+                
+                Reglas ESTRICTAS:
+                1. Haz UNA (1) pregunta técnica sobre $topic.
+                2. Espera la respuesta.
+                3. EVALUACIÓN INMEDIATA:
+                   - Si responde bien -> Puntaje alto.
+                   - Si responde "no sé", se queda callado o habla de OTRO TEMA (fútbol, clima, chistes) -> PUNTAJE: 0.
+                
+                4. FORMATO OBLIGATORIO (No inventes otro):
+                   "PUNTAJE: [0-100]. FEEDBACK: [Tu opinión]."
+                   
+                5. IMPORTANTE: Aunque el usuario te insulte o diga chistes, TU DEBER ES DAR EL PUNTAJE.
+                6. Despídete y corta.
             """.trimIndent()
         }
 
@@ -122,7 +129,7 @@ class VapiClient(private val apiKey: String, private val baseUrl: String) {
             voice = voiceConfig,
             transcriber = TranscriberConfig("deepgram", "nova-2", lang),
             firstMessage = firstMsg,
-            serverUrl = WEBHOOK_URL // El buzón sigue activo
+            serverUrl = WEBHOOK_URL
         )
 
         try {
@@ -133,12 +140,11 @@ class VapiClient(private val apiKey: String, private val baseUrl: String) {
             }
             val responseText = response.bodyAsText()
 
-            // Imprimimos respuesta cruda por si las dudas
             println("📩 VAPI RESPONSE: $responseText")
 
             if (response.status.value in 200..299) {
                 val data = jsonConfig.decodeFromString<VapiAssistantResponse>(responseText)
-                println("✅ Asistente JUEZ VELOZ creado. ID: ${data.id}")
+                println("✅ Asistente creado. ID: ${data.id}")
                 return data.id
             } else {
                 println("❌ ERROR VAPI: $responseText")
