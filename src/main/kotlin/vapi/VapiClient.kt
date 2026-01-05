@@ -18,12 +18,11 @@ data class VapiMessage(val role: String, val content: String)
 
 @Serializable
 data class ModelConfig(
-    // 🧠 CEREBRO: Usamos GPT-3.5 de OpenAI (Consume tus créditos de Vapi, es barato y estable)
     val provider: String = "openai",
     val model: String = "gpt-3.5-turbo",
     val messages: List<VapiMessage>,
-    val temperature: Double = 0.7, // Creatividad balanceada
-    val maxTokens: Int = 150       // Respuestas concisas
+    val temperature: Double = 0.7,
+    val maxTokens: Int = 250
 )
 
 @Serializable
@@ -34,10 +33,7 @@ data class TranscriberConfig(
 )
 
 @Serializable
-data class VoiceConfig(
-    val provider: String,
-    val voiceId: String
-)
+data class VoiceConfig(val provider: String, val voiceId: String)
 
 @Serializable
 data class CreateAssistantRequest(
@@ -45,7 +41,9 @@ data class CreateAssistantRequest(
     val model: ModelConfig,
     val voice: VoiceConfig,
     val transcriber: TranscriberConfig,
-    val firstMessage: String?
+    val firstMessage: String?,
+    val serverUrl: String? = null
+    // ⚠️ IMPORTANTE: Sacamos 'analysis' para que no de error 400
 )
 
 @Serializable
@@ -63,14 +61,18 @@ class VapiClient(private val apiKey: String, private val baseUrl: String) {
 
     private val client = HttpClient(CIO) {
         install(ContentNegotiation) { json(jsonConfig) }
+        expectSuccess = false // Para poder leer el error si falla
     }
 
     suspend fun createEphemeralAssistant(prompt: String, topic: String): String {
-        println("🤖 VapiClient: Configurando Entrevista para: $topic")
+        println("🤖 VapiClient: Configurando Juez VELOZ (1 Pregunta) para: $topic")
 
-        // Detección simple de idioma
+        // 👇 TU URL DE NGROK (La saqué de tu captura, chequeá que siga verde)
+        val MI_URL_NGROK = "https://reunitable-zipppier-candie.ngrok-free.dev"
+        val WEBHOOK_URL = "$MI_URL_NGROK/vapi/webhook"
+
         val isEnglish = topic.lowercase().let {
-            it.contains("english") || it.contains("ingles") || it.contains("inglés")
+            it.contains("english") || it.contains("ingles")
         }
 
         val lang: String
@@ -79,83 +81,71 @@ class VapiClient(private val apiKey: String, private val baseUrl: String) {
         val instructions: String
 
         if (isEnglish) {
-            // --- MODO INGLÉS ---
             lang = "en"
-            // Voz: Andrew (Azure) - Clara y profesional
-            voiceConfig = VoiceConfig(provider = "azure", voiceId = "en-US-AndrewNeural")
-            firstMsg = "Hello! I am your technical interviewer. Ready to start?"
+            voiceConfig = VoiceConfig("azure", "en-US-AndrewNeural")
+            firstMsg = "Hello! Ready for one technical question?"
 
             instructions = """
-                Role: Senior Technical Interviewer specialized in $topic.
-                Goal: Assess the candidate's knowledge with 10 technical questions.
+                Role: Technical Interviewer ($topic).
                 Rules:
-                1. Ask ONE question at a time. Wait for the answer.
-                2. Keep your responses short and professional.
-                3. Do not invent names or technologies. Stick to standard $topic concepts.
-                4. After 10 questions, say "Interview Finished" and stop.
+                1. Ask EXACTLY ONE technical question based on the topic.
+                2. Wait for the user's answer.
+                3. IMMEDIATELY after the answer, say "FINISH" and provide a score.
+                4. REQUIRED FORMAT: "PUNTAJE: [0-100]. FEEDBACK: [Short summary]."
+                5. Do not ask more questions. Say goodbye and stop speaking.
             """.trimIndent()
-
         } else {
-            // --- MODO ESPAÑOL (ARGENTINA) ---
             lang = "es"
+            // 🇦🇷 Voz Tomás (Argentina)
+            voiceConfig = VoiceConfig("azure", "es-AR-TomasNeural")
+            firstMsg = "Hola. Te voy a hacer una sola pregunta técnica. ¿Listo?"
 
-            // 🇦🇷 VOZ: TOMAS (Azure) - Acento Argentino/Rioplatense
-            // Es mucho más amigable y se entiende perfecto.
-            voiceConfig = VoiceConfig(provider = "azure", voiceId = "es-AR-TomasNeural")
-
-            firstMsg = "Hola. Soy tu entrevistador técnico. ¿Estás listo para arrancar?"
-
+            // 🧠 INSTRUCCIONES DEL JUEZ VELOZ
             instructions = """
-                Rol: Entrevistador Técnico Senior experto en $topic.
-                Objetivo: Evaluar al candidato con una serie de 10 preguntas técnicas.
+                Rol: Entrevistador Técnico ($topic).
                 Reglas:
-                1. Haz UNA sola pregunta a la vez. Espera que el usuario responda.
-                2. Sé amable pero profesional. Usa un tono natural.
-                3. No inventes términos raros. Usa terminología estándar de la industria.
-                4. Tus respuestas deben ser breves (máximo 2 oraciones) para agilizar la charla.
-                5. Al llegar a la pregunta 10, di "Entrevista finalizada" y despídete.
+                1. Haz EXACTAMENTE UNA (1) pregunta técnica difícil sobre el tema.
+                2. Espera que el usuario responda.
+                3. INMEDIATAMENTE después de su respuesta, evalúa su desempeño.
+                4. FORMATO OBLIGATORIO DE RESPUESTA FINAL:
+                   "Muy bien, terminamos. PUNTAJE: [0 a 100]. FEEDBACK: [Resumen de 1 frase]."
+                5. No hagas más preguntas. Despídete y corta.
             """.trimIndent()
         }
 
-        // Armamos el mensaje de sistema (Prompt + Instrucciones)
         val finalSystemPrompt = "$prompt\n\n$instructions"
         val systemMessage = VapiMessage(role = "system", content = finalSystemPrompt)
 
-        // Creamos el Request
         val requestBody = CreateAssistantRequest(
             name = "Entrevistador $topic",
-            model = ModelConfig(
-                messages = listOf(systemMessage)
-            ),
+            model = ModelConfig(messages = listOf(systemMessage)),
             voice = voiceConfig,
-            transcriber = TranscriberConfig(
-                provider = "deepgram",
-                model = "nova-2",
-                language = lang
-            ),
-            firstMessage = firstMsg
+            transcriber = TranscriberConfig("deepgram", "nova-2", lang),
+            firstMessage = firstMsg,
+            serverUrl = WEBHOOK_URL // El buzón sigue activo
         )
 
-        // Enviamos a Vapi
         try {
             val response = client.post("$baseUrl/assistant") {
                 header(HttpHeaders.Authorization, "Bearer $apiKey")
                 contentType(ContentType.Application.Json)
                 setBody(requestBody)
             }
-
             val responseText = response.bodyAsText()
+
+            // Imprimimos respuesta cruda por si las dudas
+            println("📩 VAPI RESPONSE: $responseText")
 
             if (response.status.value in 200..299) {
                 val data = jsonConfig.decodeFromString<VapiAssistantResponse>(responseText)
-                println("✅ Asistente creado exitosamente. ID: ${data.id}")
+                println("✅ Asistente JUEZ VELOZ creado. ID: ${data.id}")
                 return data.id
             } else {
                 println("❌ ERROR VAPI: $responseText")
                 throw RuntimeException("Vapi Error: $responseText")
             }
         } catch (e: Exception) {
-            println("❌ Excepción en conexión: ${e.message}")
+            println("❌ Excepción: ${e.message}")
             throw e
         }
     }
