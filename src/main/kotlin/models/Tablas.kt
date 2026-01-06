@@ -20,9 +20,10 @@ object Interviews : Table("interviews") {
     val userId = reference("user_id", Users.id)
     val topic = varchar("topic", 50)
 
-    // Campo clave para Vapi
-    val assistantId = varchar("assistant_id", 100).nullable()
+    // 👇 NUEVO CAMPO: Guardamos el nivel (Trainee, Junior, Senior)
+    val level = varchar("level", 20).default("Junior")
 
+    val assistantId = varchar("assistant_id", 100).nullable()
     val status = varchar("status", 20).default("IN_PROGRESS")
     val score = integer("score").nullable()
     val feedbackSummary = text("feedback_summary").nullable()

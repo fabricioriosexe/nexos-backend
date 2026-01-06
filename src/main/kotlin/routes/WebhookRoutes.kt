@@ -22,11 +22,9 @@ fun Route.webhookRoutes() {
                 val assistantId = event.message.call?.assistantId
                 println("\n🕵️ --- ANALIZANDO ---")
 
-                // 1. BUSCAMOS EL PUNTAJE
+                // 1. Regex de Puntaje
                 var scoreRegex = Regex("""(?:PUNTAJE|NOTA|SCORE)[^\d]{0,10}(\d{1,3})""", RegexOption.IGNORE_CASE)
                 var match = scoreRegex.find(transcript)
-
-                // Fallback si no hay etiqueta
                 if (match == null) {
                     scoreRegex = Regex("""\b(\d{1,3})\b.*(?:Feedback|Comentario)""", RegexOption.IGNORE_CASE)
                     match = scoreRegex.find(transcript)
@@ -35,54 +33,57 @@ fun Route.webhookRoutes() {
                 if (match != null) {
                     val score = match.groupValues[1].toInt()
 
-                    // 2. CORTE QUIRÚRGICO (LA SOLUCIÓN) 🔪
-                    // Tomamos el índice donde termina el número del puntaje
+                    // 2. Limpieza de Texto (Anti-User)
                     val endOfScoreIndex = match.range.last + 1
-
-                    // Nos quedamos SOLO con lo que sigue después del número
                     var rawFeedback = transcript.substring(endOfScoreIndex).trim()
 
-                    // 3. LIMPIEZA FINA
-                    // Sacamos palabras como "Feedback:", "Comentario:", puntos, comas iniciales
                     val cleanupRegex = Regex("""^[\.,\-\s]*(?:Feedback|Comentario|FEEDBACK)[:\.\s]*""", RegexOption.IGNORE_CASE)
                     var cleanFeedback = rawFeedback.replaceFirst(cleanupRegex, "").trim()
 
-                    // Si quedó basura de "AI:" o "User:" al final (raro, pero posible), lo sacamos
                     if (cleanFeedback.contains("User:", ignoreCase = true)) {
                         cleanFeedback = cleanFeedback.substringBefore("User:")
                     }
                     cleanFeedback = cleanFeedback.replace("AI:", "", ignoreCase = true).trim()
 
-                    // Mayúscula inicial
                     if (cleanFeedback.isNotEmpty()) {
                         cleanFeedback = cleanFeedback.replaceFirstChar { it.uppercase() }
                     } else {
                         cleanFeedback = "Sin feedback detallado."
                     }
 
-                    // 4. GUARDAR EN DB
+                    // 3. GUARDAR EN DB CON LEVEL
                     val dbUrl = "jdbc:mysql://localhost:3306/nexos?allowPublicKeyRetrieval=true&useSSL=false"
                     val conn = DriverManager.getConnection(dbUrl, "root", "admin")
 
                     var realTopic = "Entrevista Técnica"
+                    var realLevel = "Junior" // Default
+
                     if (assistantId != null) {
                         try {
-                            val rs = conn.prepareStatement("SELECT topic FROM interviews WHERE assistant_id = ? LIMIT 1").apply { setString(1, assistantId) }.executeQuery()
-                            if (rs.next()) realTopic = rs.getString("topic")
+                            // Recuperamos el level original usando assistant_id
+                            val query = "SELECT topic, level FROM interviews WHERE assistant_id = ? LIMIT 1"
+                            val stmt = conn.prepareStatement(query)
+                            stmt.setString(1, assistantId)
+                            val rs = stmt.executeQuery()
+
+                            if (rs.next()) {
+                                realTopic = rs.getString("topic")
+                                realLevel = rs.getString("level") ?: "Junior"
+                            }
                         } catch (e: Exception) {}
                     }
 
-                    val insertSQL = "INSERT INTO interview_results (topic, score, feedback, transcript) VALUES (?, ?, ?, ?)"
+                    val insertSQL = "INSERT INTO interview_results (topic, level, score, feedback, transcript) VALUES (?, ?, ?, ?, ?)"
                     conn.prepareStatement(insertSQL).apply {
                         setString(1, realTopic)
-                        setInt(2, score)
-                        setString(3, cleanFeedback) // Texto purificado
-                        setString(4, transcript)    // Texto original
+                        setString(2, realLevel) // Guardamos el nivel
+                        setInt(3, score)
+                        setString(4, cleanFeedback)
+                        setString(5, transcript)
                         executeUpdate()
                     }
                     conn.close()
-                    println("✅ Guardado: $score en $realTopic")
-                    println("📝 Feedback Final Limpio: $cleanFeedback")
+                    println("✅ Guardado: $score en $realTopic ($realLevel)")
                 }
             }
             call.respond(HttpStatusCode.OK)

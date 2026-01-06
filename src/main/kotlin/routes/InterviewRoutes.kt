@@ -23,17 +23,23 @@ fun Route.interviewRoutes() {
         try {
             val request = call.receive<CreateInterviewRequest>()
 
-            // Prompt Original (Sin niveles todavía)
+            // 1. Personalidad según nivel
+            val instruction = when (request.level.lowercase()) {
+                "trainee" -> "Nivel: TRAINEE/MENTOR. Haz preguntas muy básicas y teóricas. Sé paciente."
+                "junior" -> "Nivel: JUNIOR. Haz preguntas estándar. Sé profesional."
+                "senior" -> "Nivel: SENIOR/PRINCIPAL. Haz preguntas complejas de arquitectura. Sé ESTRICTO."
+                else -> "Nivel: ESTÁNDAR."
+            }
+
             val systemPrompt = """
-                Role: You are an Expert Technical Recruiter specialized in ${request.topic}.
-                Rules:
-                1. Ask EXACTLY ONE technical question.
-                2. Wait for the answer.
-                3. IMMEDIATE EVALUATION.
+                Contexto: Entrevistando candidato nivel ${request.level} en ${request.topic}.
+                Instrucción: $instruction
             """.trimIndent()
 
+            // 2. Crear en Vapi
             val assistantIdGenerado = vapiClient.createEphemeralAssistant(systemPrompt, request.topic)
 
+            // 3. Guardar en DB con LEVEL
             val responseObj = transaction {
                 val userRow = Users.select { Users.firebaseUid eq request.firebaseUid }.singleOrNull()
                 if (userRow != null) {
@@ -41,6 +47,7 @@ fun Route.interviewRoutes() {
                     val newId = Interviews.insert {
                         it[userId] = userIdReal
                         it[topic] = request.topic
+                        it[level] = request.level // 👈 GUARDAMOS NIVEL
                         it[assistantId] = assistantIdGenerado
                         it[status] = "IN_PROGRESS"
                     }.get(Interviews.id)
@@ -67,14 +74,15 @@ fun Route.interviewRoutes() {
             val conn = DriverManager.getConnection(dbUrl, "root", "admin")
 
             var result: InterviewResultResponse? = null
-            // Trae solo el último
-            val query = "SELECT id, topic, score, feedback, created_at FROM interview_results ORDER BY id DESC LIMIT 1"
+            // Agregamos level a la query
+            val query = "SELECT id, topic, level, score, feedback, created_at FROM interview_results ORDER BY id DESC LIMIT 1"
             val rs = conn.prepareStatement(query).executeQuery()
 
             if (rs.next()) {
                 result = InterviewResultResponse(
                     rs.getInt("id"), rs.getInt("score"),
                     rs.getString("feedback") ?: "", rs.getString("topic"),
+                    rs.getString("level") ?: "Junior", // Leemos level
                     rs.getTimestamp("created_at").toString()
                 )
             }
@@ -84,7 +92,7 @@ fun Route.interviewRoutes() {
         } catch (e: Exception) { call.respond(HttpStatusCode.InternalServerError, e.message.toString()) }
     }
 
-    // --- 🆕 RUTA 3: HISTORIAL COMPLETO (GET) ---
+    // --- RUTA 3: HISTORIAL (GET) ---
     get("/results/history") {
         try {
             val dbUrl = "jdbc:mysql://localhost:3306/nexos?allowPublicKeyRetrieval=true&useSSL=false"
@@ -92,8 +100,8 @@ fun Route.interviewRoutes() {
 
             val list = mutableListOf<InterviewResultResponse>()
 
-            // Trae los últimos 10 para el gráfico, ordenados por fecha ascendente (viejo -> nuevo)
-            val query = "SELECT * FROM (SELECT id, topic, score, feedback, created_at FROM interview_results ORDER BY created_at DESC LIMIT 10) sub ORDER BY created_at ASC"
+            // Agregamos level a la query
+            val query = "SELECT * FROM (SELECT id, topic, level, score, feedback, created_at FROM interview_results ORDER BY created_at DESC LIMIT 10) sub ORDER BY created_at ASC"
             val rs = conn.prepareStatement(query).executeQuery()
 
             while (rs.next()) {
@@ -101,6 +109,7 @@ fun Route.interviewRoutes() {
                     InterviewResultResponse(
                         rs.getInt("id"), rs.getInt("score"),
                         rs.getString("feedback") ?: "", rs.getString("topic"),
+                        rs.getString("level") ?: "Junior", // Leemos level
                         rs.getTimestamp("created_at").toString()
                     )
                 )
