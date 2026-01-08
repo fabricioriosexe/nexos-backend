@@ -7,7 +7,7 @@ import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
 import com.ff.models.Users
 import com.ff.models.Interviews
-import java.sql.DriverManager // Necesario para el parche manual
+import java.sql.DriverManager
 
 fun Application.configureDatabases() {
     val myDriver = environment.config.property("storage.driverClassName").getString()
@@ -32,22 +32,27 @@ fun Application.configureDatabases() {
         SchemaUtils.create(Users, Interviews)
     }
 
-    // 🛠️ PARCHE SQL AUTOMÁTICO PARA AGREGAR 'LEVEL' 🛠️
-    // Esto agrega las columnas si no existen.
+    // 🛠️ PARCHE SQL AUTOMÁTICO 🛠️
     try {
         val conn = DriverManager.getConnection(myUrl, myUser, myPassword)
         val stmt = conn.createStatement()
 
-        // 1. Agregar level a la tabla 'interviews' (Gestión interna)
+        // 1. Agregar level a la tabla 'interviews'
         try {
             stmt.executeUpdate("ALTER TABLE interviews ADD COLUMN level VARCHAR(20) DEFAULT 'Junior'")
             println("✅ Columna 'level' agregada a tabla interviews")
         } catch (e: Exception) { /* Ignoramos si ya existe */ }
 
-        // 2. Agregar level a la tabla 'interview_results' (Resultados finales)
+        // 2. Agregar level a la tabla 'interview_results'
         try {
             stmt.executeUpdate("ALTER TABLE interview_results ADD COLUMN level VARCHAR(20) DEFAULT 'Junior'")
             println("✅ Columna 'level' agregada a tabla interview_results")
+        } catch (e: Exception) { /* Ignoramos si ya existe */ }
+
+        // 3. NUEVO: Agregar user_id a la tabla 'interview_results'
+        try {
+            stmt.executeUpdate("ALTER TABLE interview_results ADD COLUMN user_id BIGINT DEFAULT NULL")
+            println("✅ Columna 'user_id' agregada a tabla interview_results")
         } catch (e: Exception) { /* Ignoramos si ya existe */ }
 
         conn.close()
@@ -55,5 +60,5 @@ fun Application.configureDatabases() {
         println("⚠️ Advertencia de migración: ${e.message}")
     }
 
-    log.info("✅ Base de datos lista con soporte de Niveles")
+    log.info("✅ Base de datos lista con soporte de Niveles y Usuarios")
 }
