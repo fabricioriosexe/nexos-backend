@@ -11,7 +11,7 @@ import io.ktor.serialization.kotlinx.json.*
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
-// --- 1. ESTRUCTURAS DE DATOS ---
+// --- 1. ESTRUCTURAS DE DATOS (DTOs) ---
 
 @Serializable
 data class VapiMessage(val role: String, val content: String)
@@ -48,8 +48,12 @@ data class CreateAssistantRequest(
 @Serializable
 data class VapiAssistantResponse(val id: String, val name: String? = null)
 
-// --- 2. CLIENTE VAPI ---
+// --- 2. CLIENTE VAPI (LÓGICA PRINCIPAL) ---
 
+/**
+ * Cliente encargado de la comunicación con la API de Vapi.ai.
+ * Gestiona la creación de asistentes efímeros (de un solo uso) para cada entrevista.
+ */
 class VapiClient(private val apiKey: String, private val baseUrl: String) {
 
     private val jsonConfig = Json {
@@ -63,6 +67,13 @@ class VapiClient(private val apiKey: String, private val baseUrl: String) {
         expectSuccess = false
     }
 
+    /**
+     * Crea un "Asistente Efímero" configurado específicamente para el tópico y nivel solicitado.
+     *
+     * @param prompt Contexto base del sistema.
+     * @param topic El tema de la entrevista (ej: "Kotlin", "React").
+     * @return El ID del asistente generado para vincularlo a la llamada.
+     */
     suspend fun createEphemeralAssistant(prompt: String, topic: String): String {
         println("🤖 VapiClient: Configurando Juez VELOZ para: $topic")
 
@@ -70,6 +81,7 @@ class VapiClient(private val apiKey: String, private val baseUrl: String) {
         val MI_URL_NGROK = "https://reunitable-zipppier-candie.ngrok-free.dev"
         val WEBHOOK_URL = "$MI_URL_NGROK/vapi/webhook"
 
+        // Detección básica de idioma para ajustar la voz y el modelo de transcripción
         val isEnglish = topic.lowercase().let {
             it.contains("english") || it.contains("ingles")
         }
@@ -97,11 +109,16 @@ class VapiClient(private val apiKey: String, private val baseUrl: String) {
             """.trimIndent()
         } else {
             lang = "es"
-            // 🇦🇷 Voz Tomás (Argentina)
+            // 🇦🇷 Voz Tomás (Argentina) para UX local
             voiceConfig = VoiceConfig("azure", "es-AR-TomasNeural")
             firstMsg = "Hola. Te voy a hacer una sola pregunta técnica. ¿Listo?"
 
-            // 🧠 PROMPT ANTI-TROLL Y ESTRICTO
+            /**
+             * 🧠 ESTRATEGIA DE PROMPT (ANTI-TROLL):
+             * Se instruye al modelo para actuar como un "Juez Estricto".
+             * Se fuerza un formato de salida (Regex Friendly) para facilitar el parsing
+             * en el Webhook: "PUNTAJE: [0-100]. FEEDBACK: [...]"
+             */
             instructions = """
                 Rol: Entrevistador Técnico ($topic).
                 
@@ -120,6 +137,7 @@ class VapiClient(private val apiKey: String, private val baseUrl: String) {
             """.trimIndent()
         }
 
+        // Concatenamos el prompt base (que viene del request) con las instrucciones estrictas
         val finalSystemPrompt = "$prompt\n\n$instructions"
         val systemMessage = VapiMessage(role = "system", content = finalSystemPrompt)
 
@@ -129,7 +147,7 @@ class VapiClient(private val apiKey: String, private val baseUrl: String) {
             voice = voiceConfig,
             transcriber = TranscriberConfig("deepgram", "nova-2", lang),
             firstMessage = firstMsg,
-            serverUrl = WEBHOOK_URL
+            serverUrl = WEBHOOK_URL // Vital para recibir el reporte final
         )
 
         try {
@@ -151,7 +169,7 @@ class VapiClient(private val apiKey: String, private val baseUrl: String) {
                 throw RuntimeException("Vapi Error: $responseText")
             }
         } catch (e: Exception) {
-            println("❌ Excepción: ${e.message}")
+            println("❌ Excepción crítica en VapiClient: ${e.message}")
             throw e
         }
     }

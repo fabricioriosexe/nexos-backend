@@ -2,11 +2,15 @@ package com.ff.dtos
 
 import kotlinx.serialization.Serializable
 
+/**
+ * DTOs para el flujo de entrevistas.
+ */
+
 @Serializable
 data class CreateInterviewRequest(
-    val firebaseUid: String,
-    val topic: String,
-    val level: String = "Junior" // 👈 NUEVO: Campo de nivel con valor por defecto
+    val firebaseUid: String, // Identificador del usuario que solicita la entrevista
+    val topic: String,       // Ej: "React", "Kotlin", "Java"
+    val level: String = "Junior" // Nivel de dificultad deseado
 )
 
 @Serializable
@@ -15,7 +19,7 @@ data class InterviewResponse(
     val topic: String,
     val status: String,
     val date: String,
-    val assistantId: String? = null,
+    val assistantId: String? = null, // ID para conectar con el widget de Vapi
     val imageUrl: String? = null
 )
 
@@ -25,6 +29,6 @@ data class InterviewResultResponse(
     val score: Int,
     val feedback: String,
     val topic: String,
-    val level: String = "Junior", // 👈 NUEVO: Mandamos el nivel al frontend
+    val level: String = "Junior",
     val date: String
 )

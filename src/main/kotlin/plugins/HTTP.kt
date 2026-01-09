@@ -6,13 +6,18 @@ import io.ktor.server.plugins.cors.routing.*
 
 fun Application.configureHTTP() {
     install(CORS) {
-        anyHost() // 🔓 LA LLAVE MAESTRA: Permite localhost, 127.0.0.1, tu celular, etc.
+        anyHost() // 🔓 Permite cualquier origen (localhost:5173, etc.)
 
         allowMethod(HttpMethod.Options)
         allowMethod(HttpMethod.Post)
         allowMethod(HttpMethod.Get)
+        // 👇 ESTA FALTABA (Sin esto, el guardar perfil falla)
+        allowMethod(HttpMethod.Put)
+        allowMethod(HttpMethod.Delete) // Agreguemos Delete por si acaso
+        allowMethod(HttpMethod.Patch)
+
         allowHeader(HttpHeaders.ContentType)
         allowHeader(HttpHeaders.Authorization)
-        allowCredentials = true
+        // allowCredentials = true // ⚠️ OJO: Con anyHost() a veces esto da conflicto, si falla coméntalo.
     }
 }
