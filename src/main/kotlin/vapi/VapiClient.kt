@@ -11,10 +11,15 @@ import io.ktor.serialization.kotlinx.json.*
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
-// --- 1. ESTRUCTURAS DE DATOS (DTOs) ---
+// ==========================================
+// 1. ESTRUCTURAS DE DATOS (DTOs) PARA VAPI
+// ==========================================
 
 @Serializable
-data class VapiMessage(val role: String, val content: String)
+data class VapiMessage(
+    val role: String,
+    val content: String
+)
 
 @Serializable
 data class ModelConfig(
@@ -33,7 +38,10 @@ data class TranscriberConfig(
 )
 
 @Serializable
-data class VoiceConfig(val provider: String, val voiceId: String)
+data class VoiceConfig(
+    val provider: String,
+    val voiceId: String
+)
 
 @Serializable
 data class CreateAssistantRequest(
@@ -46,14 +54,15 @@ data class CreateAssistantRequest(
 )
 
 @Serializable
-data class VapiAssistantResponse(val id: String, val name: String? = null)
+data class VapiAssistantResponse(
+    val id: String,
+    val name: String? = null
+)
 
-// --- 2. CLIENTE VAPI (LÓGICA PRINCIPAL) ---
+// ==========================================
+// 2. CLIENTE VAPI (LÓGICA PRINCIPAL)
+// ==========================================
 
-/**
- * Cliente encargado de la comunicación con la API de Vapi.ai.
- * Gestiona la creación de asistentes efímeros (de un solo uso) para cada entrevista.
- */
 class VapiClient(private val apiKey: String, private val baseUrl: String) {
 
     private val jsonConfig = Json {
@@ -68,88 +77,90 @@ class VapiClient(private val apiKey: String, private val baseUrl: String) {
     }
 
     /**
-     * Crea un "Asistente Efímero" configurado específicamente para el tópico y nivel solicitado.
-     *
-     * @param prompt Contexto base del sistema.
-     * @param topic El tema de la entrevista (ej: "Kotlin", "React").
-     * @return El ID del asistente generado para vincularlo a la llamada.
+     * Crea un asistente efímero.
+     * Recibe los parámetros nuevos: language y targetFocus para personalizar la experiencia.
      */
-    suspend fun createEphemeralAssistant(prompt: String, topic: String): String {
-        println("🤖 VapiClient: Configurando Juez VELOZ para: $topic")
+    suspend fun createEphemeralAssistant(
+        promptBase: String,
+        topic: String,
+        language: String,
+        targetFocus: String?
+    ): String {
+        println("🤖 VapiClient: Configurando IA para: $topic | Idioma: $language | Empresa: $targetFocus")
 
-        // 👇 TU URL DE NGROK (Asegurate de que sea la que generaste HOY)
+        // 👇 IMPORTANTE: Esta URL debe ser la que te da ngrok.exe cuando lo inicias
         val MI_URL_NGROK = "https://reunitable-zipppier-candie.ngrok-free.dev"
         val WEBHOOK_URL = "$MI_URL_NGROK/vapi/webhook"
 
-        // Detección básica de idioma para ajustar la voz y el modelo de transcripción
-        val isEnglish = topic.lowercase().let {
-            it.contains("english") || it.contains("ingles")
-        }
-
-        val lang: String
         val voiceConfig: VoiceConfig
         val firstMsg: String
         val instructions: String
 
-        if (isEnglish) {
-            lang = "en"
-            voiceConfig = VoiceConfig("azure", "en-US-AndrewNeural")
-            firstMsg = "Hello! Ready for one technical question?"
+        // 1. Lógica de Empresa Objetivo (Si el usuario escribió algo, lo agregamos al prompt)
+        val focusText = if (!targetFocus.isNullOrBlank()) {
+            if (language == "en") "IMPORTANT CONTEXT: You are interviewing a candidate specifically for a position at '$targetFocus'. Adapt your tone accordingly."
+            else "CONTEXTO IMPORTANTE: Estás entrevistando a un candidato específicamente para una posición en '$targetFocus'. Adapta tu tono."
+        } else {
+            ""
+        }
 
+        // 2. Configuración según Idioma
+        if (language == "en") {
+            // --- CONFIGURACIÓN INGLÉS ---
+            voiceConfig = VoiceConfig("azure", "en-US-AndrewNeural")
+            firstMsg = "Hello! Ready for your technical question?"
+
+            // Prompt Anti-Alucinaciones (Inglés)
             instructions = """
-                Role: Technical Interviewer ($topic).
+                Role: Technical Interviewer ($topic). $focusText
                 Rules:
-                1. Ask EXACTLY ONE technical question.
-                2. Wait for the answer.
-                3. IMMEDIATE EVALUATION:
+                1. Ask EXACTLY ONE technical question relevant to $topic.
+                2. WAITING PHASE: Wait for the candidate to explain their answer. Do NOT evaluate the initial greeting (e.g., "Yes", "Hello", "Ready").
+                3. IMMEDIATE EVALUATION (Only after technical answer):
                    - Good answer -> High score.
                    - "I don't know" or irrelevant topic -> SCORE: 0.
-                4. REQUIRED FORMAT: "PUNTAJE: [0-100]. FEEDBACK: [Summary]."
+                4. REQUIRED FORMAT: "SCORE: [0-100]. FEEDBACK: [Summary]."
                 5. Do not ask more questions. Say goodbye.
             """.trimIndent()
+
         } else {
-            lang = "es"
-            // 🇦🇷 Voz Tomás (Argentina) para UX local
+            // --- CONFIGURACIÓN ESPAÑOL ---
             voiceConfig = VoiceConfig("azure", "es-AR-TomasNeural")
             firstMsg = "Hola. Te voy a hacer una sola pregunta técnica. ¿Listo?"
 
-            /**
-             * 🧠 ESTRATEGIA DE PROMPT (ANTI-TROLL):
-             * Se instruye al modelo para actuar como un "Juez Estricto".
-             * Se fuerza un formato de salida (Regex Friendly) para facilitar el parsing
-             * en el Webhook: "PUNTAJE: [0-100]. FEEDBACK: [...]"
-             */
+            // Prompt Anti-Alucinaciones (Español)
             instructions = """
-                Rol: Entrevistador Técnico ($topic).
+                Rol: Entrevistador Técnico ($topic). $focusText
                 
                 Reglas ESTRICTAS:
                 1. Haz UNA (1) pregunta técnica sobre $topic.
-                2. Espera la respuesta.
-                3. EVALUACIÓN INMEDIATA:
+                2. FASE DE ESPERA: Espera a que el candidato explique su solución técnica. NO EVALÚES el saludo inicial (ej: "Hola", "Sí", "Listo").
+                3. EVALUACIÓN (Solo tras la respuesta técnica):
                    - Si responde bien -> Puntaje alto.
-                   - Si responde "no sé", se queda callado o habla de OTRO TEMA (fútbol, clima, chistes) -> PUNTAJE: 0.
+                   - Si responde "no sé", hay silencio total o habla de OTRO TEMA -> PUNTAJE: 0.
                 
-                4. FORMATO OBLIGATORIO (No inventes otro):
+                4. FORMATO OBLIGATORIO:
                    "PUNTAJE: [0-100]. FEEDBACK: [Tu opinión]."
                    
-                5. IMPORTANTE: Aunque el usuario te insulte o diga chistes, TU DEBER ES DAR EL PUNTAJE.
-                6. Despídete y corta.
+                5. Despídete y corta.
             """.trimIndent()
         }
 
-        // Concatenamos el prompt base (que viene del request) con las instrucciones estrictas
-        val finalSystemPrompt = "$prompt\n\n$instructions"
+        // 3. Construcción del Prompt Final
+        val finalSystemPrompt = "$promptBase\n\n$instructions"
         val systemMessage = VapiMessage(role = "system", content = finalSystemPrompt)
 
+        // 4. Armado del Request (Usando el idioma correcto en el Transcriber)
         val requestBody = CreateAssistantRequest(
-            name = "Entrevistador $topic",
+            name = "Entrevistador $topic ($language)",
             model = ModelConfig(messages = listOf(systemMessage)),
             voice = voiceConfig,
-            transcriber = TranscriberConfig("deepgram", "nova-2", lang),
+            transcriber = TranscriberConfig("deepgram", "nova-2", language), // Importante para que entienda tu acento
             firstMessage = firstMsg,
-            serverUrl = WEBHOOK_URL // Vital para recibir el reporte final
+            serverUrl = WEBHOOK_URL
         )
 
+        // 5. Llamada a la API de Vapi
         try {
             val response = client.post("$baseUrl/assistant") {
                 header(HttpHeaders.Authorization, "Bearer $apiKey")
@@ -158,18 +169,20 @@ class VapiClient(private val apiKey: String, private val baseUrl: String) {
             }
             val responseText = response.bodyAsText()
 
-            println("📩 VAPI RESPONSE: $responseText")
+            // Logs detallados para debugging
+            println("📩 VAPI RESPONSE RAW: $responseText")
 
             if (response.status.value in 200..299) {
                 val data = jsonConfig.decodeFromString<VapiAssistantResponse>(responseText)
-                println("✅ Asistente creado. ID: ${data.id}")
+                println("✅ Asistente creado exitosamente. ID: ${data.id}")
                 return data.id
             } else {
-                println("❌ ERROR VAPI: $responseText")
+                println("❌ ERROR VAPI STATUS: ${response.status}")
                 throw RuntimeException("Vapi Error: $responseText")
             }
         } catch (e: Exception) {
             println("❌ Excepción crítica en VapiClient: ${e.message}")
+            e.printStackTrace()
             throw e
         }
     }

@@ -14,47 +14,38 @@ import java.sql.DriverManager
 
 /**
  * Módulo de rutas para la gestión del Ciclo de Vida de la Entrevista.
- * Maneja: Creación de la sala (Vapi), Asignación de asistentes y Consulta de resultados.
+ * ACTUALIZADO: Soporte para Multi-idioma y Target Focus.
  */
 fun Route.interviewRoutes() {
 
     // Inicialización del cliente de IA
-    // Se recuperan las credenciales del application.yaml para no hardcodear claves.
     val apiKey = application.environment.config.propertyOrNull("vapi.apiKey")?.getString() ?: ""
     val baseUrl = application.environment.config.propertyOrNull("vapi.baseUrl")?.getString() ?: "https://api.vapi.ai"
     val vapiClient = VapiClient(apiKey, baseUrl)
 
     // --- RUTA 1: CREAR ENTREVISTA (POST) ---
-    /**
-     * Inicia una nueva simulación.
-     * 1. Define la personalidad de la IA según el nivel (Trainee/Junior/Senior).
-     * 2. Contacta a Vapi para crear un asistente efímero.
-     * 3. Registra la entrevista en la Base de Datos vinculada al usuario.
-     */
     post("/interviews") {
         try {
             val request = call.receive<CreateInterviewRequest>()
 
-            // 1. Lógica de Personalización (Dynamic Prompting)
-            // Ajustamos la agresividad y complejidad del entrevistador según el nivel seleccionado.
+            // 1. Lógica de Nivel (Simplificamos aquí porque el VapiClient se encarga del resto)
             val instruction = when (request.level.lowercase()) {
-                "trainee" -> "Nivel: TRAINEE/MENTOR. Haz preguntas muy básicas y teóricas. Sé paciente y ayuda si se traba."
-                "junior" -> "Nivel: JUNIOR. Haz preguntas estándar de mercado. Sé profesional pero accesible."
-                "senior" -> "Nivel: SENIOR/PRINCIPAL. Haz preguntas complejas de arquitectura y casos de borde. Sé ESTRICTO y busca fallos."
+                "trainee" -> "Nivel: TRAINEE. Preguntas teóricas y básicas."
+                "junior" -> "Nivel: JUNIOR. Preguntas estándar."
+                "senior" -> "Nivel: SENIOR. Preguntas de arquitectura y casos bordes."
                 else -> "Nivel: ESTÁNDAR."
             }
 
-            // Inyectamos el contexto específico (Topic + Nivel) en el prompt del sistema
-            val systemPrompt = """
-                Contexto: Entrevistando candidato nivel ${request.level} en ${request.topic}.
-                Instrucción: $instruction
-            """.trimIndent()
+            // 2. Orquestación con Vapi (AHORA CON 4 PARÁMETROS)
+            // Le pasamos el idioma y la empresa para que VapiClient configure la voz y el prompt
+            val assistantIdGenerado = vapiClient.createEphemeralAssistant(
+                promptBase = instruction,
+                topic = request.topic,
+                language = request.language,    // 👈 NUEVO: Viene del Frontend ("es" o "en")
+                targetFocus = request.targetFocus // 👈 NUEVO: Empresa (ej. "Mercado Libre")
+            )
 
-            // 2. Orquestación con Vapi (Llamada a API Externa)
-            val assistantIdGenerado = vapiClient.createEphemeralAssistant(systemPrompt, request.topic)
-
-            // 3. Persistencia Transaccional
-            // Usamos Exposed para garantizar que la entrevista se guarde solo si el usuario existe.
+            // 3. Persistencia Transaccional (Exposed)
             val responseObj = transaction {
                 val userRow = Users.select { Users.firebaseUid eq request.firebaseUid }.singleOrNull()
 
@@ -70,14 +61,14 @@ fun Route.interviewRoutes() {
                         it[status] = "IN_PROGRESS"
                     }.get(Interviews.id)
 
-                    // Retornamos el DTO listo para que el Frontend inicie la llamada
+                    // Retornamos el DTO listo
                     InterviewResponse(
                         newId,
                         request.topic,
                         "IN_PROGRESS",
                         java.time.LocalDateTime.now().toString(),
                         assistantIdGenerado,
-                        "assets/icons/default.png" // Icono por defecto (placeholder)
+                        "assets/icons/default.png"
                     )
                 } else null
             }
@@ -92,10 +83,7 @@ fun Route.interviewRoutes() {
     }
 
     // --- RUTA 2: ÚLTIMO RESULTADO (GET) ---
-    /**
-     * Obtiene el feedback más reciente para mostrar en el Dashboard ("Tu último rendimiento").
-     * Implementa seguridad por UID para que un usuario no vea datos de otro.
-     */
+    // (Esta parte queda igual, usa JDBC directo para lectura rápida)
     get("/results/latest") {
         val firebaseUid = call.request.queryParameters["uid"]
 
@@ -105,13 +93,11 @@ fun Route.interviewRoutes() {
         }
 
         try {
-            // Usamos JDBC directo para consultas de lectura optimizadas
             val dbUrl = "jdbc:mysql://localhost:3306/nexos?allowPublicKeyRetrieval=true&useSSL=false"
             val conn = DriverManager.getConnection(dbUrl, "root", "admin")
 
             var result: InterviewResultResponse? = null
 
-            // Paso A: Resolver identidad (Firebase UID -> Internal ID)
             val userQuery = "SELECT id FROM users WHERE firebase_uid = ?"
             val stmtUser = conn.prepareStatement(userQuery)
             stmtUser.setString(1, firebaseUid)
@@ -120,7 +106,6 @@ fun Route.interviewRoutes() {
             if (rsUser.next()) {
                 val internalUserId = rsUser.getLong("id")
 
-                // Paso B: Obtener último resultado validado por user_id
                 val query = """
                     SELECT id, topic, level, score, feedback, created_at 
                     FROM interview_results 
@@ -152,12 +137,6 @@ fun Route.interviewRoutes() {
     }
 
     // --- RUTA 3: HISTORIAL COMPLETO (GET) ---
-    /**
-     * Obtiene el historial para los gráficos de progreso.
-     * Estrategia SQL: "Last 10 ordered chronologically".
-     * Obtenemos los últimos 10 registros, pero los reordenamos por fecha ascendente
-     * para que el gráfico de línea se dibuje de izquierda a derecha correctamente.
-     */
     get("/results/history") {
         val firebaseUid = call.request.queryParameters["uid"]
 
@@ -171,7 +150,6 @@ fun Route.interviewRoutes() {
             val conn = DriverManager.getConnection(dbUrl, "root", "admin")
             val list = mutableListOf<InterviewResultResponse>()
 
-            // Paso A: Resolver identidad
             val userQuery = "SELECT id FROM users WHERE firebase_uid = ?"
             val stmtUser = conn.prepareStatement(userQuery)
             stmtUser.setString(1, firebaseUid)
@@ -180,9 +158,6 @@ fun Route.interviewRoutes() {
             if (rsUser.next()) {
                 val internalUserId = rsUser.getLong("id")
 
-                // Paso B: Query Anidada para Gráficos
-                // 1. Subquery: Obtiene los últimos 10 (ORDER BY created_at DESC)
-                // 2. Query Principal: Los reordena cronológicamente (ORDER BY created_at ASC)
                 val query = """
                     SELECT * FROM (
                         SELECT id, topic, level, score, feedback, created_at 
