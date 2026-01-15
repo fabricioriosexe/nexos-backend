@@ -31,3 +31,10 @@ data class InterviewResultResponse(
     val level: String = "Junior",
     val date: String
 )
+
+
+// DTOs para el Botón de Pánico (Copiloto)
+@Serializable
+data class CopilotRequest(val question: String, val topic: String)
+@Serializable
+data class CopilotResponse(val hint: String)
